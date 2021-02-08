@@ -1,100 +1,132 @@
-<!DOCTYPE html>
-<html lang="en">
-
+<html>
 <head>
-	<meta charset="UTF-8">
-	<title>barcode scanner wasm</title>
+  <meta charset="utf-8">
+  <title>jsQR Demo</title>
+  <link href="https://fonts.googleapis.com/css?family=Ropa+Sans" rel="stylesheet">
+  <!-- Import the javascript bundle produced by Emscripten-->
+  <script src="/a.out.js"></script>
+  <style>
+    body {
+      font-family: 'Ropa Sans', sans-serif;
+      color: #333;
+      max-width: 640px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    #githubLink {
+      position: absolute;
+      right: 0;
+      top: 12px;
+      color: #2D99FF;
+    }
+
+    h1 {
+      margin: 10px 0;
+      font-size: 40px;
+    }
+
+    #loadingMessage {
+      text-align: center;
+      padding: 40px;
+      background-color: #eee;
+    }
+
+    #canvas {
+      width: 100%;
+    }
+
+    #output {
+      margin-top: 20px;
+      background: #eee;
+      padding: 10px;
+      padding-bottom: 0;
+    }
+
+    #output div {
+      padding-bottom: 10px;
+      word-wrap: break-word;
+    }
+
+    #noQRFound {
+      text-align: center;
+    }
+  </style>
 </head>
-
-<!-- We create some DOM elements necessary for grabbing webcam frames -->
 <body>
-	<div>
-		<!-- note that we hide the live video element using 'display:none', that way only the canvas is rendered -->
-		<video id="live" width="320" height="240" autoplay style="border:5px solid #000000; display:none;"> </video>
-		<canvas id="canvas" style="border:5px solid #000000"> </canvas>
-	</div>
+  <h1>jsQR Demo</h1>
+  <a id="githubLink" href="https://github.com/cozmo/jsQR">View documentation on Github</a>
+  <p>Pure JavaScript QR code decoding library.</p>
+  <div id="loadingMessage">🎥 Unable to access video stream (please make sure you have a webcam enabled)</div>
+  <canvas id="canvas" hidden></canvas>
+  <div id="output" hidden>
+    <div id="outputMessage">No QR code detected.</div>
+    <div hidden><b>Data:</b> <span id="outputData"></span></div>
+  </div>
+  <script>
+    var video = document.createElement("video");
+    var canvasElement = document.getElementById("canvas");
+    var canvas = canvasElement.getContext("2d");
+    var loadingMessage = document.getElementById("loadingMessage");
+    var outputContainer = document.getElementById("output");
+    var outputMessage = document.getElementById("outputMessage");
+    var outputData = document.getElementById("outputData");
 
-</body>
-
-<!-- Import the javascript bundle produced by Emscripten-->
-<script src="/a.out.js"></script>
-
-<!-- The main 'application code' tying it all together -->
-<script>
-
-// Execute the application code when the WebAssembly module is ready.
-Module.onRuntimeInitialized = async _ => {
-    
-// wrap all C functions using cwrap. Note that we have to provide crwap with the function signature.
+    function drawLine(begin, end, color) {
+      canvas.beginPath();
+      canvas.moveTo(begin.x, begin.y);
+      canvas.lineTo(end.x, end.y);
+      canvas.lineWidth = 4;
+      canvas.strokeStyle = color;
+      canvas.stroke();
+    }
+    // wrap all C functions using cwrap. Note that we have to provide crwap with the function signature.
 const api = {
 	scan_image: Module.cwrap('scan_image', '', ['number', 'number', 'number']),
 	create_buffer: Module.cwrap('create_buffer', 'number', ['number', 'number']),
 	destroy_buffer: Module.cwrap('destroy_buffer', '', ['number']),
 };
 
-const video = document.getElementById("live");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext('2d');
-const desiredWidth = 1280;
-const desiredHeight = 720;
+    // Use facingMode: environment to attemt to get the front camera on phones
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then(function(stream) {
+      video.srcObject = stream;
+      video.setAttribute("playsinline", true); // required to tell iOS safari we don't want fullscreen
+      video.play();
+      requestAnimationFrame(tick);
+    });
 
-// settings for the getUserMedia call
-const constraints = {
-	video: {
-		// the browser will try to honor this resolution, but it may end up being lower.
-		width: desiredWidth,
-		height: desiredHeight
-	}
-};
+    function tick() {
+      loadingMessage.innerText = "⌛ Loading video..."
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        loadingMessage.hidden = true;
+        canvasElement.hidden = false;
+        outputContainer.hidden = false;
 
-// open the webcam stream
-navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
-	// stream is a MediaStream object
-	video.srcObject = stream;
-	video.play();
-
-	// tell the canvas which resolution we ended up getting from the webcam
-	const track = stream.getVideoTracks()[0];
-	const actualSettings = track.getSettings();
-	console.log(actualSettings.width, actualSettings.height)
-	canvas.width = actualSettings.width;
-	canvas.height = actualSettings.height;
-
-	// every k milliseconds, we draw the contents of the video to the canvas and run the detector.
-	const timer = setInterval(detectSymbols, 250);
-
-}).catch((e) => {
-	throw e
-});
-
-function detectSymbols() {
-	// grab a frame from the media source and draw it to the canvas
-	ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-	// get the image data from the canvas
-	const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
-
-	// convert the image data to grayscale 
-	const grayData = []
-	const d = image.data;
+        canvasElement.height = video.videoHeight;
+        canvasElement.width = video.videoWidth;
+        canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+        var imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+        const grayData = []
+	const d = imageData.data;
 	for (var i = 0, j = 0; i < d.length; i += 4, j++) {
 		grayData[j] = (d[i] * 66 + d[i + 1] * 129 + d[i + 2] * 25 + 4096) >> 8;
 	}
 
 	// put the data into the allocated buffer on the wasm heap.
-	const p = api.create_buffer(image.width, image.height);
+	const p = api.create_buffer(imageData.width, imageData.height);
 	Module.HEAP8.set(grayData, p);
 
 	// call the scanner function
-	api.scan_image(p, image.width, image.height)
+	api.scan_image(p, imageData.width, imageData.height)
 
 	// clean up 
     //(this is not really necessary in this example as we could reuse the buffer, but is used to demonstrate how you can manage Wasm heap memory from the js environment)
 	api.destroy_buffer(p);
+      }
+      requestAnimationFrame(tick);
+    }
 
-}
-
-function drawPoly(ctx, poly) {
+    function drawPoly(ctx, poly) {
 // drawPoly expects a flat array of coordinates forming a polygon (e.g. [x1,y1,x2,y2,... etc])
 	ctx.beginPath();
 	ctx.moveTo(poly[0], poly[1]);
@@ -121,13 +153,11 @@ Module['processResult'] = (symbol, data, polygon) => {
 	console.log(polygon)
 
 	// draw the bounding polygon
-	drawPoly(ctx, polygon)
+	drawPoly(canvas, polygon)
 
 	// render the data at the first coordinate of the polygon
-	renderData(ctx, data, polygon[0], polygon[1] - 10)
+	renderData(canvas, data, polygon[0], polygon[1] - 10)
 }
-
-}
-</script>
-
+  </script>
+</body>
 </html>
